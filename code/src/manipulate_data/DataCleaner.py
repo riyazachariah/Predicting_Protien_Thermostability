@@ -1,41 +1,45 @@
 ## The original data contained issues or rather like most real world data, this data was dirty. Some rows had all features marked as NaN. In some rows, the 'tm' and 'ph' feature columns had been swapped.
 ## This code file takes care of both of those issues.
-
-## Imports
+import logging
 import numpy as np
 import pandas as pd
 
-import os
-from IPython.display import display
+class DataCleaner:
+    def __init__(self, train_data_path, updates_data_path):
+        self.train_df = pd.read_csv(train_data_path)
+        self.train_updates_df = pd.read_csv(updates_data_path)
+        self.seqid_2_phtm_update_map = self._create_update_map()
+        self.bad_seqids = self._get_bad_seqids()
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
+        self.handler = logging.FileHandler("DataCleaner.log")
+        self.handler.setLevel(logging.DEBUG)
+        self.formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        self.handler.setFormatter(self.formatter)
+        self.logger.addHandler(self.handler)
 
-## First read the data
-train_df = pd.read_csv("/Users/riyazachariah/Thermostability_Prediction/data/raw/train.csv")
+    def _create_update_map(self):
+        return self.train_updates_df[~pd.isna(self.train_updates_df["pH"])].groupby("seq_id")[["pH", "tm"]].first().to_dict("index")
+    
+    def _get_bad_seqids(self):
+        return self.train_updates_df[pd.isna(self.train_updates_df["pH"])]["seq_id"].to_list()
 
-## Now explore the data
-print(train_df.describe())
+    def _fix_tm_ph(self, row):
+        update_vals = self.seqid_2_phtm_update_map.get(row["seq_id"], None)
+        if update_vals is not None:
+            row["tm"] = update_vals["tm"]
+            row["pH"] = update_vals["pH"]
+        return row
 
-## Look for entries where the pH and tm values have been swapped
-swap_mask = train_df['pH']>14
+    def clean_data(self):
+        try:
+            self.logger.info("Data cleaning in progress...")
+            self.train_df = self.train_df[~self.train_df["seq_id"].isin(self.bad_seqids)].reset_index(drop=True)
+            self.train_df = self.train_df.apply(self._fix_tm_ph, axis=1).reset_index(drop=True)
+            return self.train_df
 
-## Create a temp column to store the tm values temporarily
-train_df['tm_temp'] = train_df['tm']
+        except Exception as e:
+            self.logger.error(f"Error while cleaning the data: {str(e)}")
+            raise e
 
-## Do the swap
-train_df.loc[swap_mask, 'tm'] = train_df.loc[swap_mask, 'pH']
-train_df.loc[swap_mask, 'pH'] = train_df.loc[swap_mask, 'tm_temp']
-
-## Alternatively, I can also use the numpy.where() function
-## train_df['tm'] = np.where(train_df['pH']>14, train_df['pH'], train_df['tm'])
-
-## Look for missing/NaN values
-nan_mask = train_df.isnull()
-train_missing = train_df[nan_mask]
-columns_with_missing = train_df.columns[nan_mask.any()]
-
-## Drop rows that are missing values in either sequence or tm columns
-train_df = train_df.dropna(subset=['protein_sequence', 'tm'], inplace=True)
-
-## An interactive look at the corrected dataframe
-display(train_df)
-
-## Compare with the updated training set provided by the team
